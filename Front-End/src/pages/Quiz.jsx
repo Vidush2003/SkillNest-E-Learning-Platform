@@ -1,0 +1,485 @@
+import { useState, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import QuizTimer from '../components/QuizTimer';
+import { CheckCircle, Circle, Flag, ArrowLeft, ArrowRight, Send } from 'lucide-react';
+import { quizAPI, courseAPI } from '../utils/api';
+
+const Quiz = () => {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const [quiz, setQuiz] = useState(null);
+  const [course, setCourse] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [currentQuestion, setCurrentQuestion] = useState(0);
+  const [answers, setAnswers] = useState({});
+  const [markedForReview, setMarkedForReview] = useState([]);
+  const [submitted, setSubmitted] = useState(false);
+  const [score, setScore] = useState(null);
+  const [negativeMarksInfo, setNegativeMarksInfo] = useState({ totalNegativeMarks: 0, incorrectAnswers: 0 });
+
+  useEffect(() => {
+    const fetchQuizData = async () => {
+      try {
+        setLoading(true);
+        const quizResponse = await quizAPI.getById(id);
+        const quizData = quizResponse.data;
+
+        // Transform questions to match component expectations
+        const transformedQuestions = quizData.questions.map((q, index) => {
+          // Find the correct answer index
+          const correctIndex = q.options.findIndex(option => option.correct === true);
+
+          return {
+            id: `q${index}`,
+            question: q.text,
+            options: q.options.map(option => option.text),
+            correctAnswer: correctIndex,
+            type: 'mcq',
+            negativeMarks: 1
+          };
+        });
+
+
+        setQuiz({
+          ...quizData,
+          questions: transformedQuestions,
+          duration: 30, // 30 minutes default
+          passingScore: 60 // 60% passing score
+        });
+
+        // Get course information
+        if (quizData.course) {
+          const courseResponse = await courseAPI.getById(quizData.course);
+          setCourse(courseResponse.data);
+        }
+      } catch (err) {
+        console.error('Error fetching quiz:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (id) {
+      fetchQuizData();
+    }
+  }, [id]);
+
+  const handleAnswer = (questionId, answer) => {
+    setAnswers({
+      ...answers,
+      [questionId]: answer
+    });
+  };
+
+  const handleMarkForReview = (questionIndex) => {
+    if (markedForReview.includes(questionIndex)) {
+      setMarkedForReview(markedForReview.filter((i) => i !== questionIndex));
+    } else {
+      setMarkedForReview([...markedForReview, questionIndex]);
+    }
+  };
+
+  const handleSubmit = () => {
+    if (window.confirm('Are you sure you want to submit the quiz?')) {
+      // Calculate score with negative marking
+      let correctAnswers = 0;
+      let incorrectAnswers = 0;
+      let totalObjectiveQuestions = 0;
+      let totalNegativeMarks = 0;
+
+      quiz.questions.forEach((question) => {
+        if (question.type !== 'short-answer') {
+          totalObjectiveQuestions++;
+          const userAnswer = answers[question.id];
+
+          if (question.type === 'mcq' && userAnswer === question.correctAnswer) {
+            correctAnswers++;
+          } else if (question.type === 'true-false' && userAnswer === question.correctAnswer) {
+            correctAnswers++;
+          } else if (userAnswer !== undefined && userAnswer !== null) {
+            // Only count as incorrect if user actually answered (not skipped)
+            incorrectAnswers++;
+            totalNegativeMarks += question.negativeMarks || 0;
+          }
+        }
+      });
+
+      // Calculate score: (correct answers * marks per question) - (incorrect answers * negative marks)
+      const marksPerQuestion = 100 / totalObjectiveQuestions;
+      const positiveScore = correctAnswers * marksPerQuestion;
+      const negativeScore = totalNegativeMarks;
+      const finalScore = Math.max(0, positiveScore - negativeScore); // Ensure score doesn't go below 0
+
+      const calculatedScore = Math.round(finalScore);
+
+      setScore(calculatedScore);
+      setNegativeMarksInfo({ totalNegativeMarks, incorrectAnswers });
+      setSubmitted(true);
+    }
+  };
+
+  const handleTimeUp = () => {
+    alert('Time is up! Your quiz will be auto-submitted.');
+    handleSubmit();
+  };
+
+  const getQuestionStatus = (index) => {
+    const question = quiz.questions[index];
+    if (answers[question.id] !== undefined) return 'answered';
+    if (markedForReview.includes(index)) return 'marked';
+    return 'unanswered';
+  };
+
+  if (!quiz || !course) {
+    return (
+      <div className="page-container">
+        <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>
+          <h3>Quiz not found</h3>
+          <button onClick={() => navigate('/dashboard')} className="btn btn-primary" style={{ marginTop: '1rem' }}>
+            Back to Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (submitted) {
+    const passed = score >= quiz.passingScore;
+
+    return (
+      <div className="page-container">
+        <div className="card" style={{ maxWidth: '600px', margin: '0 auto', textAlign: 'center', padding: '3rem' }}>
+          <div
+            style={{
+              width: '100px',
+              height: '100px',
+              borderRadius: '50%',
+              backgroundColor: passed ? '#d1fae5' : '#fee2e2',
+              color: passed ? '#065f46' : '#991b1b',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '3rem',
+              fontWeight: '700',
+              margin: '0 auto 1.5rem'
+            }}
+          >
+            {score}%
+          </div>
+
+          <h1 style={{ fontSize: '2rem', marginBottom: '1rem' }}>
+            {passed ? '🎉 Congratulations!' : '📚 Keep Learning!'}
+          </h1>
+
+          <p style={{ fontSize: '1.125rem', color: 'var(--text-secondary)', marginBottom: '2rem' }}>
+            {passed
+              ? `You've passed the quiz! Your score: ${score}%`
+              : `You scored ${score}%. Passing score is ${quiz.passingScore}%. Try again!`}
+          </p>
+
+          {/* Negative Marking Info */}
+          {negativeMarksInfo.incorrectAnswers > 0 && (
+            <div style={{ 
+              backgroundColor: '#fef3c7', 
+              border: '1px solid #f59e0b', 
+              borderRadius: '0.5rem', 
+              padding: '1rem', 
+              marginBottom: '1.5rem' 
+            }}>
+              <h3 style={{ color: '#92400e', marginBottom: '0.5rem' }}>Negative Marking Applied</h3>
+              <p style={{ color: '#92400e', marginBottom: '0.25rem' }}>
+                You had {negativeMarksInfo.incorrectAnswers} incorrect answers
+              </p>
+              <p style={{ color: '#92400e' }}>
+                Total negative marks deducted: {negativeMarksInfo.totalNegativeMarks}
+              </p>
+            </div>
+          )}
+
+          {/* Answer Review */}
+          <div style={{ textAlign: 'left', marginTop: '2rem' }}>
+            <h3 style={{ marginBottom: '1rem' }}>Answer Review</h3>
+            {quiz.questions.map((question, index) => {
+              const userAnswer = answers[question.id];
+              const isCorrect =
+                question.type === 'short-answer' ||
+                (question.type === 'mcq' && userAnswer === question.correctAnswer) ||
+                (question.type === 'true-false' && userAnswer === question.correctAnswer);
+
+              return (
+                <div
+                  key={question.id}
+                  style={{
+                    padding: '1rem',
+                    marginBottom: '1rem',
+                    backgroundColor: 'var(--light-bg)',
+                    borderRadius: '0.5rem',
+                    borderLeft: `4px solid ${
+                      question.type === 'short-answer'
+                        ? 'var(--warning-color)'
+                        : isCorrect
+                        ? 'var(--secondary-color)'
+                        : 'var(--danger-color)'
+                    }`
+                  }}
+                >
+                  <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>
+                    Question {index + 1}
+                  </div>
+                  <p style={{ marginBottom: '0.5rem' }}>{question.question}</p>
+
+                  {question.type === 'short-answer' ? (
+                    <div>
+                      <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                        <strong>Your Answer:</strong> {userAnswer || 'Not answered'}
+                      </p>
+                      <p style={{ fontSize: '0.875rem', color: 'var(--warning-color)', marginTop: '0.5rem' }}>
+                        ⚠️ This answer will be graded manually
+                      </p>
+                    </div>
+                  ) : (
+                    <div>
+                      {question.type === 'mcq' && (
+                        <div>
+                          <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                            <strong>Your Answer:</strong>{' '}
+                            {userAnswer !== undefined ? question.options[userAnswer] : 'Not answered'}
+                          </p>
+                          <p style={{ fontSize: '0.875rem', color: 'var(--secondary-color)' }}>
+                            <strong>Correct Answer:</strong> {question.correctAnswer >= 0 && question.correctAnswer < question.options.length ? question.options[question.correctAnswer] : 'Not available'}
+                          </p>
+                          {userAnswer !== undefined && userAnswer !== question.correctAnswer && question.negativeMarks > 0 && (
+                            <p style={{ fontSize: '0.875rem', color: 'var(--danger-color)', marginTop: '0.25rem' }}>
+                              ⚠️ Negative marking applied: -{question.negativeMarks} marks
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      {question.type === 'true-false' && (
+                        <div>
+                          <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                            <strong>Your Answer:</strong>{' '}
+                            {userAnswer !== undefined ? (userAnswer ? 'True' : 'False') : 'Not answered'}
+                          </p>
+                          <p style={{ fontSize: '0.875rem', color: 'var(--secondary-color)' }}>
+                            <strong>Correct Answer:</strong> {question.correctAnswer ? 'True' : 'False'}
+                          </p>
+                          {userAnswer !== undefined && userAnswer !== question.correctAnswer && question.negativeMarks > 0 && (
+                            <p style={{ fontSize: '0.875rem', color: 'var(--danger-color)', marginTop: '0.25rem' }}>
+                              ⚠️ Negative marking applied: -{question.negativeMarks} marks
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', marginTop: '2rem' }}>
+            <button onClick={() => navigate('/dashboard')} className="btn btn-outline">
+              Back to Dashboard
+            </button>
+            {!passed && (
+              <button onClick={() => window.location.reload()} className="btn btn-primary">
+                Retake Quiz
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const question = quiz.questions[currentQuestion];
+  const totalAnswered = Object.keys(answers).length;
+  const progressPercentage = Math.round((totalAnswered / quiz.questions.length) * 100);
+
+  return (
+    <div className="page-container">
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: '1.5rem' }}>
+        {/* Quiz Content */}
+        <div>
+          <div className="quiz-container">
+            {/* Quiz Header */}
+            <div className="quiz-header">
+              <div>
+                <h1 style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>{quiz.title}</h1>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                  {course.title}
+                </p>
+                {/* Negative Marking Info */}
+                <div style={{ 
+                  backgroundColor: '#dbeafe', 
+                  border: '1px solid #3b82f6', 
+                  borderRadius: '0.25rem', 
+                  padding: '0.5rem', 
+                  marginTop: '0.5rem',
+                  fontSize: '0.875rem'
+                }}>
+                  <strong>ℹ️ Negative Marking:</strong> Incorrect answers will deduct {question.negativeMarks || 0} marks each
+                </div>
+              </div>
+              <QuizTimer duration={quiz.duration} onTimeUp={handleTimeUp} />
+            </div>
+
+            {/* Progress Bar */}
+            <div className="quiz-progress">
+              <div className="progress-header">
+                <span>Overall Progress</span>
+                <span>
+                  {totalAnswered} / {quiz.questions.length} Answered ({progressPercentage}%)
+                </span>
+              </div>
+              <div className="progress-bar">
+                <div className="progress-fill" style={{ width: `${progressPercentage}%` }} />
+              </div>
+            </div>
+
+            {/* Question */}
+            <div className="question-container">
+              <p className="question-number">
+                Question {currentQuestion + 1} of {quiz.questions.length}
+              </p>
+              <h2 className="question-text">{question.question}</h2>
+
+              {/* MCQ Options */}
+              {question.type === 'mcq' && (
+                <div className="options-container">
+                  {question.options.map((option, index) => (
+                    <div
+                      key={index}
+                      className={`option ${answers[question.id] === index ? 'selected' : ''}`}
+                      onClick={() => handleAnswer(question.id, index)}
+                    >
+                      {option}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* True/False */}
+              {question.type === 'true-false' && (
+                <div className="options-container">
+                  <div
+                    className={`option ${answers[question.id] === true ? 'selected' : ''}`}
+                    onClick={() => handleAnswer(question.id, true)}
+                  >
+                    True
+                  </div>
+                  <div
+                    className={`option ${answers[question.id] === false ? 'selected' : ''}`}
+                    onClick={() => handleAnswer(question.id, false)}
+                  >
+                    False
+                  </div>
+                </div>
+              )}
+
+              {/* Short Answer */}
+              {question.type === 'short-answer' && (
+                <div>
+                  <textarea
+                    className="form-input"
+                    rows="6"
+                    placeholder="Type your answer here..."
+                    value={answers[question.id] || ''}
+                    onChange={(e) => handleAnswer(question.id, e.target.value)}
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Navigation */}
+            <div className="question-navigation">
+              <div>
+                <button
+                  className="btn btn-outline"
+                  onClick={() => setCurrentQuestion(currentQuestion - 1)}
+                  disabled={currentQuestion === 0}
+                >
+                  <ArrowLeft size={16} />
+                  Previous
+                </button>
+              </div>
+
+              <button
+                className="btn btn-outline"
+                onClick={() => handleMarkForReview(currentQuestion)}
+                style={{
+                  backgroundColor: markedForReview.includes(currentQuestion) ? 'var(--warning-color)' : '',
+                  color: markedForReview.includes(currentQuestion) ? 'var(--white)' : ''
+                }}
+              >
+                <Flag size={16} />
+                {markedForReview.includes(currentQuestion) ? 'Unmark' : 'Mark for Review'}
+              </button>
+
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                {currentQuestion < quiz.questions.length - 1 ? (
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => setCurrentQuestion(currentQuestion + 1)}
+                  >
+                    Next
+                    <ArrowRight size={16} />
+                  </button>
+                ) : (
+                  <button className="btn btn-success" onClick={handleSubmit}>
+                    <Send size={16} />
+                    Submit Quiz
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Question Sidebar */}
+        <div className="question-sidebar">
+          <h3 style={{ marginBottom: '1rem' }}>Questions</h3>
+          <div className="question-grid">
+            {quiz.questions.map((q, index) => {
+              const status = getQuestionStatus(index);
+              return (
+                <div
+                  key={q.id}
+                  className={`question-badge ${index === currentQuestion ? 'current' : ''} ${
+                    status === 'answered' ? 'answered' : ''
+                  } ${status === 'marked' ? 'marked' : ''}`}
+                  onClick={() => setCurrentQuestion(index)}
+                >
+                  {index + 1}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Legend */}
+          <div style={{ marginTop: '1.5rem', fontSize: '0.75rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+              <div style={{ width: '16px', height: '16px', backgroundColor: 'var(--primary-color)', borderRadius: '0.25rem' }} />
+              <span>Current</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+              <div style={{ width: '16px', height: '16px', backgroundColor: 'var(--secondary-color)', borderRadius: '0.25rem' }} />
+              <span>Answered</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+              <div style={{ width: '16px', height: '16px', backgroundColor: 'var(--warning-color)', borderRadius: '0.25rem' }} />
+              <span>Marked</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <div style={{ width: '16px', height: '16px', border: '2px solid var(--border-color)', borderRadius: '0.25rem' }} />
+              <span>Unanswered</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Quiz;
